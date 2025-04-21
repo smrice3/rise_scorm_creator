@@ -220,9 +220,10 @@ def create_imsmanifest(course_title, modules, additional_pages):
             </item>"""
             
             # Create resource entry - using the proper format with href at the resource level
+            # Updated paths to use wiki_content directly
             resources_xml += f"""
-    <resource type="webcontent" identifier="{page_identifier}" href="web_resources/wiki_content/{safe_filename}">
-        <file href="web_resources/wiki_content/{safe_filename}"/>
+    <resource type="webcontent" identifier="{page_identifier}" href="wiki_content/{safe_filename}">
+        <file href="wiki_content/{safe_filename}"/>
     </resource>"""
         
         # Close the module item
@@ -231,9 +232,10 @@ def create_imsmanifest(course_title, modules, additional_pages):
     
     # Add additional HTML pages as resources if any
     for page in additional_pages:
+        # Updated paths to use wiki_content directly
         resources_xml += f"""
-    <resource type="webcontent" identifier="{page['identifier']}" href="web_resources/wiki_content/{page['filename']}">
-        <file href="web_resources/wiki_content/{page['filename']}"/>
+    <resource type="webcontent" identifier="{page['identifier']}" href="wiki_content/{page['filename']}">
+        <file href="wiki_content/{page['filename']}"/>
     </resource>"""
     
     # Create organizations structure with LearningModules
