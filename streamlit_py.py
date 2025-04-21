@@ -1,18 +1,19 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
 import os
-import shutil
 import zipfile
 import tempfile
 import uuid
 from datetime import datetime
 import base64
 import io
+import shutil
+import re
 
-st.set_page_config(page_title="SCORM Package Generator", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Rise to IMSCC Converter", page_icon="📚", layout="wide")
 
-st.title("Rise TinCan to SCORM Package Converter")
-st.write("This app converts a Rise TinCan XML file into a SCORM 1.2 package.")
+st.title("Rise TinCan to IMSCC Converter")
+st.write("This app converts a Rise TinCan XML file into an IMSCC package for Canvas.")
 
 # File uploader for tincan.xml
 uploaded_file = st.file_uploader("Upload your tincan.xml file", type=["xml"])
@@ -108,8 +109,12 @@ def get_course_info(xml_content):
     
     return {'title': "Untitled Course", 'description': ""}
 
-def create_html_page(lesson_id, lesson_title, base_url, url_format="blocks"):
+def create_html_page(lesson_id, lesson_title, lesson_description, base_url, url_format="blocks"):
     """Create an HTML page with an iframe pointing to the Rise content"""
+    
+    # Sanitize the title for use in filenames and IDs
+    safe_title = re.sub(r'[^\w\s-]', '', lesson_title).strip().lower()
+    safe_title = re.sub(r'[-\s]+', '-', safe_title)
     
     html_template = f"""<!DOCTYPE html>
 <html>
@@ -136,158 +141,10 @@ def create_html_page(lesson_id, lesson_title, base_url, url_format="blocks"):
             border: none;
         }}
     </style>
-    <script>
-        var apiHandle = null;
-        var lessonStatus = "incomplete";
-        var startTimeStamp = "";
-        var exitPageStatus = "suspended";
-        
-        function getAPIHandle() {{
-            if (apiHandle == null) {{
-                apiHandle = getAPI();
-            }}
-            return apiHandle;
-        }}
-        
-        function getAPI() {{
-            var theAPI = findAPI(window);
-            if ((theAPI == null) && (window.opener != null) && (typeof(window.opener) != "undefined")) {{
-                theAPI = findAPI(window.opener);
-            }}
-            if (theAPI == null) {{
-                console.log("Unable to find an API adapter");
-            }}
-            return theAPI;
-        }}
-        
-        function findAPI(win) {{
-            var findAPITries = 0;
-            while ((win.API == null) && (win.parent != null) && (win.parent != win)) {{
-                findAPITries++;
-                if (findAPITries > 500) {{
-                    console.log("Error finding API -- too deeply nested.");
-                    return null;
-                }}
-                win = win.parent;
-            }}
-            return win.API;
-        }}
-        
-        function initializeCommunication() {{
-            var api = getAPIHandle();
-            if (api == null) {{
-                console.log("No API found.");
-                return "false";
-            }}
-            
-            var result = api.LMSInitialize("");
-            if (result != "true") {{
-                var errorNumber = api.LMSGetLastError();
-                var errorString = api.LMSGetErrorString(errorNumber);
-                var diagnostic = api.LMSGetDiagnostic(errorNumber);
-                console.log("Error initializing communication with the LMS: " + errorString);
-                return "false";
-            }}
-            
-            return "true";
-        }}
-        
-        function terminateCommunication() {{
-            var api = getAPIHandle();
-            if (api == null) {{
-                console.log("No API found.");
-                return "false";
-            }}
-            
-            var result = api.LMSFinish("");
-            if (result != "true") {{
-                var errorNumber = api.LMSGetLastError();
-                var errorString = api.LMSGetErrorString(errorNumber);
-                var diagnostic = api.LMSGetDiagnostic(errorNumber);
-                console.log("Error terminating communication with the LMS: " + errorString);
-                return "false";
-            }}
-            
-            return "true";
-        }}
-        
-        function recordCompletionStatus(status) {{
-            var api = getAPIHandle();
-            if (api == null) {{
-                console.log("No API found.");
-                return "false";
-            }}
-            
-            var result = api.LMSSetValue("cmi.core.lesson_status", status);
-            if (result != "true") {{
-                var errorNumber = api.LMSGetLastError();
-                var errorString = api.LMSGetErrorString(errorNumber);
-                var diagnostic = api.LMSGetDiagnostic(errorNumber);
-                console.log("Error setting lesson status: " + errorString);
-                return "false";
-            }}
-            
-            return "true";
-        }}
-        
-        window.onload = function() {{
-            initializeCommunication();
-            startTimeStamp = new Date();
-            recordCompletionStatus("incomplete");
-        }};
-        
-        window.onbeforeunload = function() {{
-            var endTimeStamp = new Date();
-            var totalTimeSpent = (endTimeStamp - startTimeStamp) / 1000;
-            
-            var api = getAPIHandle();
-            if (api != null) {{
-                api.LMSSetValue("cmi.core.session_time", formatTime(totalTimeSpent));
-                api.LMSCommit("");
-            }}
-            
-            recordCompletionStatus(exitPageStatus);
-            terminateCommunication();
-        }};
-        
-        function formatTime(totalSeconds) {{
-            var hours = Math.floor(totalSeconds / 3600);
-            var minutes = Math.floor((totalSeconds - hours * 3600) / 60);
-            var seconds = Math.floor(totalSeconds - hours * 3600 - minutes * 60);
-            
-            var formattedTime = "";
-            if (hours > 0) {{
-                formattedTime += hours + ":";
-            }}
-            
-            if (minutes < 10 && hours > 0) {{
-                formattedTime += "0";
-            }}
-            formattedTime += minutes + ":";
-            
-            if (seconds < 10) {{
-                formattedTime += "0";
-            }}
-            formattedTime += seconds;
-            
-            return formattedTime;
-        }}
-        
-        function markAsComplete() {{
-            exitPageStatus = "completed";
-            recordCompletionStatus("completed");
-            alert("This lesson has been marked as complete.");
-        }}
-    </script>
 </head>
 <body>
     <div class="container">
         <iframe src="{base_url}/index.html#/{url_format}/{lesson_id}" allowfullscreen></iframe>
-    </div>
-    <div style="position: absolute; bottom: 10px; right: 10px; z-index: 1000;">
-        <button onclick="markAsComplete()" style="padding: 10px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
-            Mark as Complete
-        </button>
     </div>
 </body>
 </html>
@@ -295,44 +152,58 @@ def create_html_page(lesson_id, lesson_title, base_url, url_format="blocks"):
     
     return html_template
 
-def create_imsmanifest(course_title, activities, org_identifier):
-    """Create the imsmanifest.xml file content"""
+def create_imsmanifest(course_title, activities):
+    """Create the imsmanifest.xml file for IMSCC"""
     
-    # Create resources and items XML
     resources_xml = ""
-    items_xml = ""
+    organizations_xml = ""
     
+    # Create a unique identifier for the organization
+    org_identifier = f"org_{uuid.uuid4().hex[:8]}"
+    
+    # Create resource entries for each activity
     for i, activity in enumerate(activities):
-        # Create a resource entry
+        # Sanitize the title for use in filenames and IDs
+        safe_title = re.sub(r'[^\w\s-]', '', activity['name']).strip().lower()
+        safe_title = re.sub(r'[-\s]+', '-', safe_title)
+        
+        # Create resource entry
         resources_xml += f"""
-        <resource identifier="resource_{i+1}" type="webcontent" adlcp:scormtype="sco" href="{activity['id']}.html">
-            <file href="{activity['id']}.html"/>
+        <resource identifier="resource_{i+1}" type="webcontent">
+            <file href="wiki_content/{safe_title}.html"/>
         </resource>"""
         
-        # Create an item entry
-        items_xml += f"""
+        # Create organization item entry
+        organizations_xml += f"""
             <item identifier="item_{i+1}" identifierref="resource_{i+1}">
                 <title>{activity['name']}</title>
             </item>"""
     
-    manifest_xml = f"""<?xml version="1.0" standalone="no" ?>
-<manifest identifier="{org_identifier}" version="1"
-         xmlns="http://www.imsproject.org/xsd/imscp_rootv1p1p2"
-         xmlns:adlcp="http://www.adlnet.org/xsd/adlcp_rootv1p2"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://www.imsproject.org/xsd/imscp_rootv1p1p2 imscp_rootv1p1p2.xsd
-                             http://www.imsglobal.org/xsd/imsmd_rootv1p2p1 imsmd_rootv1p2p1.xsd
-                             http://www.adlnet.org/xsd/adlcp_rootv1p2 adlcp_rootv1p2.xsd">
-
+    manifest_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<manifest identifier="manifest_{uuid.uuid4().hex[:8]}" 
+         xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1" 
+         xmlns:lom="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource" 
+         xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+         xsi:schemaLocation="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1 http://www.imsglobal.org/xsd/imscp_v1p1.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lomresource_v1p0.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lommanifest_v1p0.xsd">
   <metadata>
-    <schema>ADL SCORM</schema>
-    <schemaversion>1.2</schemaversion>
+    <schema>IMS Common Cartridge</schema>
+    <schemaversion>1.1.0</schemaversion>
+    <lomimscc:lom>
+      <lomimscc:general>
+        <lomimscc:title>
+          <lomimscc:string>{course_title}</lomimscc:string>
+        </lomimscc:title>
+      </lomimscc:general>
+    </lomimscc:lom>
   </metadata>
   
-  <organizations default="{org_identifier}_org">
-    <organization identifier="{org_identifier}_org">
-      <title>{course_title}</title>
-      {items_xml}
+  <organizations>
+    <organization identifier="{org_identifier}" structure="rooted-hierarchy">
+      <item identifier="root_item">
+        <title>{course_title}</title>
+        {organizations_xml}
+      </item>
     </organization>
   </organizations>
   
@@ -344,32 +215,113 @@ def create_imsmanifest(course_title, activities, org_identifier):
     
     return manifest_xml
 
-def create_scorm_package(activities, course_info, base_url, url_format):
-    """Create a SCORM package with the extracted activities"""
+def create_course_settings(course_title):
+    """Create necessary course settings files for IMSCC"""
+    
+    # Create course_settings/canvas_export.txt
+    canvas_export = "1"
+    
+    # Create course_settings/course_settings.xml
+    course_settings_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<course identifier="{uuid.uuid4().hex}" xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <title>{course_title}</title>
+  <course_code></course_code>
+  <locale>en</locale>
+  <settings>
+    <setting name="hide_final_grades">false</setting>
+    <setting name="allow_student_discussion_topics">true</setting>
+    <setting name="allow_student_discussion_editing">true</setting>
+    <setting name="allow_student_forum_attachments">false</setting>
+    <setting name="allow_student_organized_groups">false</setting>
+    <setting name="show_all_discussion_entries">false</setting>
+    <setting name="is_public">false</setting>
+    <setting name="open_enrollment">false</setting>
+    <setting name="allow_wiki_comments">false</setting>
+    <setting name="self_enrollment">false</setting>
+    <setting name="allow_student_assignment_edits">false</setting>
+    <setting name="allow_student_discussion_reporting">true</setting>
+    <setting name="restrict_student_past_view">false</setting>
+    <setting name="restrict_student_future_view">false</setting>
+    <setting name="grading_standard_enabled">false</setting>
+  </settings>
+  <date_format>iso8601</date_format>
+</course>
+"""
+    
+    # Create course_settings/module_meta.xml
+    module_meta_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <module identifier="{uuid.uuid4().hex}">
+    <title>{course_title} Content</title>
+    <workflow_state>active</workflow_state>
+    <position>1</position>
+    <items></items>
+  </module>
+</modules>
+"""
+    
+    # Create other necessary empty files
+    other_files = {
+        "course_settings/assignment_groups.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<assignmentGroups xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+</assignmentGroups>
+""",
+        "course_settings/files_meta.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<files xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+</files>
+""",
+        "course_settings/media_tracks.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<media_tracks xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+</media_tracks>
+""",
+        "course_settings/context.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<course_components xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <resource content_type="associated_content" identifierref="" intendeduse="syllabus" type="syllabus">
+  </resource>
+</course_components>
+"""
+    }
+    
+    return {
+        "course_settings/canvas_export.txt": canvas_export,
+        "course_settings/course_settings.xml": course_settings_xml,
+        "course_settings/module_meta.xml": module_meta_xml,
+        **other_files
+    }
+
+def create_imscc_package(activities, course_info, base_url, url_format):
+    """Create an IMSCC package with the extracted activities"""
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a unique identifier for the organization
-        org_identifier = f"scorm_package_{uuid.uuid4().hex[:8]}"
+        # Create directory structure
+        wiki_dir = os.path.join(temp_dir, "wiki_content")
+        course_settings_dir = os.path.join(temp_dir, "course_settings")
+        os.makedirs(wiki_dir, exist_ok=True)
+        os.makedirs(course_settings_dir, exist_ok=True)
         
         # Create HTML files for each activity
         for activity in activities:
-            html_content = create_html_page(activity['id'], activity['name'], base_url, url_format)
-            with open(os.path.join(temp_dir, f"{activity['id']}.html"), 'w', encoding='utf-8') as f:
+            # Sanitize the title for use in filenames
+            safe_title = re.sub(r'[^\w\s-]', '', activity['name']).strip().lower()
+            safe_title = re.sub(r'[-\s]+', '-', safe_title)
+            
+            html_content = create_html_page(activity['id'], activity['name'], activity['description'], base_url, url_format)
+            with open(os.path.join(wiki_dir, f"{safe_title}.html"), 'w', encoding='utf-8') as f:
                 f.write(html_content)
         
         # Create imsmanifest.xml
-        manifest_content = create_imsmanifest(course_info['title'], activities, org_identifier)
+        manifest_content = create_imsmanifest(course_info['title'], activities)
         with open(os.path.join(temp_dir, "imsmanifest.xml"), 'w', encoding='utf-8') as f:
             f.write(manifest_content)
         
-        # Copy your existing XSD files (assuming they are in the current directory)
-        xsd_files = ["adlcp_rootv1p2.xsd", "ims_xml.xsd", "imscp_rootv1p1p2.xsd", "imsmd_rootv1p2p1.xsd"]
-        for xsd_file in xsd_files:
-            # Assuming the XSD files are in the same directory as the script
-            if os.path.exists(xsd_file):
-                shutil.copy(xsd_file, os.path.join(temp_dir, xsd_file))
+        # Create course settings files
+        course_settings = create_course_settings(course_info['title'])
+        for file_path, content in course_settings.items():
+            full_path = os.path.join(temp_dir, file_path)
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(content)
         
-        # Create a ZIP file
+        # Create a ZIP file with .imscc extension
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk(temp_dir):
@@ -407,20 +359,20 @@ if uploaded_file is not None and base_url:
         st.subheader("Activities to be Included")
         st.dataframe(activities_df[['ID', 'Name', 'Type']])
         
-        # Create SCORM package button
-        if st.button("Generate SCORM Package"):
-            with st.spinner("Generating SCORM package..."):
-                zipfile_bytes = create_scorm_package(activities, course_info, base_url, url_format)
+        # Create IMSCC package button
+        if st.button("Generate IMSCC Package"):
+            with st.spinner("Generating IMSCC package..."):
+                zipfile_bytes = create_imscc_package(activities, course_info, base_url, url_format)
                 
                 # Create download button
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                filename = f"scorm_package_{timestamp}.zip"
+                filename = f"rise_content_{timestamp}.imscc"
                 
-                st.success("SCORM package generated successfully!")
+                st.success("IMSCC package generated successfully!")
                 
                 # Provide download link
                 b64 = base64.b64encode(zipfile_bytes.getvalue()).decode()
-                href = f'<a href="data:application/zip;base64,{b64}" download="{filename}">Download SCORM Package</a>'
+                href = f'<a href="data:application/zip;base64,{b64}" download="{filename}">Download IMSCC Package</a>'
                 st.markdown(href, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Error processing the file: {str(e)}")
@@ -432,6 +384,6 @@ else:
     1. Upload your Rise TinCan XML file.
     2. Enter the base URL of your Rise content.
     3. Select the appropriate URL format for your Rise content.
-    4. Click "Generate SCORM Package" to create a SCORM 1.2 package.
-    5. Download the ZIP file and import it into your LMS.
+    4. Click "Generate IMSCC Package" to create an IMSCC package.
+    5. Download the IMSCC file and import it into Canvas.
     """)
