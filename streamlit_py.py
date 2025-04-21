@@ -210,17 +210,19 @@ def create_imsmanifest(course_title, modules, additional_pages):
         for page in module['pages']:
             # Get page metadata
             safe_filename = f"{create_safe_filename(page['name'])}.html"
+            page_identifier = f"g{uuid.uuid4().hex[:32]}"
+            page['identifier'] = page_identifier  # Store for later use
             
             # Create item entry in the module
             organizations_xml += f"""
-            <item identifier="i_{page['id']}" identifierref="r_{page['id']}">
+            <item identifier="i_{page['id']}" identifierref="{page_identifier}">
                 <title>{page['name']}</title>
             </item>"""
             
-            # Create resource entry
+            # Create resource entry - using the proper format with href at the resource level
             resources_xml += f"""
-    <resource identifier="r_{page['id']}" type="webcontent">
-        <file href="wiki_content/{safe_filename}"/>
+    <resource type="webcontent" identifier="{page_identifier}" href="web_resources/wiki_content/{safe_filename}">
+        <file href="web_resources/wiki_content/{safe_filename}"/>
     </resource>"""
         
         # Close the module item
@@ -230,8 +232,8 @@ def create_imsmanifest(course_title, modules, additional_pages):
     # Add additional HTML pages as resources if any
     for page in additional_pages:
         resources_xml += f"""
-    <resource identifier="{page['identifier']}" type="webcontent">
-        <file href="wiki_content/{page['filename']}"/>
+    <resource type="webcontent" identifier="{page['identifier']}" href="web_resources/wiki_content/{page['filename']}">
+        <file href="web_resources/wiki_content/{page['filename']}"/>
     </resource>"""
     
     manifest_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -283,15 +285,21 @@ def create_module_meta(modules, additional_pages, course_title):
         items_xml = ""
         for j, page in enumerate(module['pages']):
             item_id = f"i_{uuid.uuid4().hex[:8]}"
-            page_identifier = f"g{uuid.uuid4().hex[:32]}"  # Generate a unique identifier for each page
             
+            # Use the identifier we stored when creating the manifest
+            page_identifier = page.get('identifier', f"g{uuid.uuid4().hex[:32]}")
+            
+            # Create item with WikiPage content_type and link_settings_json
             items_xml += f"""
       <item identifier="{item_id}">
-        <title>{page['name']}</title>
-        <content_type>wiki_page</content_type>
-        <identifierref>r_{page['id']}</identifierref>
-        <position>{j+1}</position>
+        <content_type>WikiPage</content_type>
         <workflow_state>active</workflow_state>
+        <title>{page['name']}</title>
+        <identifierref>{page_identifier}</identifierref>
+        <position>{j+1}</position>
+        <new_tab/>
+        <indent>0</indent>
+        <link_settings_json>null</link_settings_json>
       </item>"""
         
         modules_xml += f"""
@@ -311,13 +319,17 @@ def create_module_meta(modules, additional_pages, course_title):
         for j, page in enumerate(additional_pages):
             item_id = f"i_{uuid.uuid4().hex[:8]}"
             
+            # Create item with WikiPage content_type and link_settings_json
             items_xml += f"""
       <item identifier="{item_id}">
+        <content_type>WikiPage</content_type>
+        <workflow_state>{page['workflow_state']}</workflow_state>
         <title>{page['title']}</title>
-        <content_type>wiki_page</content_type>
         <identifierref>{page['identifier']}</identifierref>
         <position>{j+1}</position>
-        <workflow_state>{page['workflow_state']}</workflow_state>
+        <new_tab/>
+        <indent>0</indent>
+        <link_settings_json>null</link_settings_json>
       </item>"""
         
         # Add additional content module at the end
@@ -437,8 +449,8 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
     additional_pages = process_additional_html(additional_html_files)
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create directory structure
-        wiki_dir = os.path.join(temp_dir, "wiki_content")
+        # Create directory structure - updated to use web_resources/wiki_content
+        wiki_dir = os.path.join(temp_dir, "web_resources", "wiki_content")
         course_settings_dir = os.path.join(temp_dir, "course_settings")
         os.makedirs(wiki_dir, exist_ok=True)
         os.makedirs(course_settings_dir, exist_ok=True)
@@ -448,6 +460,7 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
             for page in module['pages']:
                 html_content, safe_title, identifier = create_html_page(page['id'], page['name'], base_url, url_format)
                 page_filename = f"{safe_title}.html"
+                page['identifier'] = identifier  # Store identifier for use in manifest
                 with open(os.path.join(wiki_dir, page_filename), 'w', encoding='utf-8') as f:
                     f.write(html_content)
         
