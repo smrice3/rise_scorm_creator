@@ -1,6 +1,7 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
 import os
+import shutil
 import zipfile
 import tempfile
 import uuid
@@ -98,6 +99,7 @@ def get_course_info(xml_content):
 def create_html_page(lesson_id, lesson_title, base_url):
     """Create an HTML page with an iframe pointing to the Rise content"""
     
+    # This HTML template includes SCORM 1.2 API calls
     html_template = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -283,22 +285,77 @@ def create_html_page(lesson_id, lesson_title, base_url):
     return html_template
 
 def create_imsmanifest(course_title, activities, org_identifier):
-    """Create the imsmanifest.xml file content"""
+    """Create the imsmanifest.xml file content with hierarchical structure"""
     
-    # Create resources and items XML
+    # Group activities by section (if they have a parent-child relationship)
+    sections = {}
+    standalone_activities = []
+    
+    # First, identify sections
+    for activity in activities:
+        if activity['type'] == 'section':
+            sections[activity['id']] = {
+                'info': activity,
+                'children': []
+            }
+    
+    # Then, assign activities to sections or standalone list
+    for activity in activities:
+        if activity['type'] == 'block':
+            # Try to find a parent section
+            parent_found = False
+            for section_id, section_data in sections.items():
+                # This is a simple way to check if an activity belongs to a section
+                # You might need a more sophisticated approach depending on your data structure
+                if activity['name'].startswith(section_data['info']['name']):
+                    section_data['children'].append(activity)
+                    parent_found = True
+                    break
+            
+            if not parent_found:
+                standalone_activities.append(activity)
+    
+    # Create resources XML
     resources_xml = ""
-    items_xml = ""
     
-    for i, activity in enumerate(activities):
-        # Create a resource entry
+    # Add each activity as a resource
+    for activity in activities:
         resources_xml += f"""
-        <resource identifier="resource_{i+1}" type="webcontent" adlcp:scormtype="sco" href="{activity['id']}.html">
+        <resource identifier="resource_{activity['id']}" type="webcontent" adlcp:scormtype="sco" href="{activity['id']}.html">
             <file href="{activity['id']}.html"/>
         </resource>"""
+    
+    # Create items XML with hierarchy
+    items_xml = ""
+    
+    # Add sections with their children
+    for section_id, section_data in sections.items():
+        section = section_data['info']
+        children = section_data['children']
         
-        # Create an item entry
-        items_xml += f"""
-            <item identifier="item_{i+1}" identifierref="resource_{i+1}">
+        # Only create a section if it has children or is a standalone section
+        if children or section_id in [a['id'] for a in standalone_activities]:
+            section_items = ""
+            
+            # Add children items
+            for child in children:
+                section_items += f"""
+                <item identifier="item_{child['id']}" identifierref="resource_{child['id']}">
+                    <title>{child['name']}</title>
+                </item>"""
+            
+            # Create the section item with children
+            items_xml += f"""
+            <item identifier="item_{section['id']}"{' identifierref="resource_' + section['id'] + '"' if section_id in [a['id'] for a in standalone_activities] else ''}>
+                <title>{section['name']}</title>
+                {section_items}
+            </item>"""
+    
+    # Add standalone activities that don't belong to any section
+    for activity in standalone_activities:
+        if activity['id'] not in [s['info']['id'] for s in sections.values()]:
+            items_xml += f"""
+            <item identifier="item_{activity['id']}" identifierref="resource_{activity['id']}">
                 <title>{activity['name']}</title>
             </item>"""
     
@@ -355,6 +412,8 @@ def create_scorm_package(activities, course_info, base_url):
             # Assuming the XSD files are in the same directory as the script
             if os.path.exists(xsd_file):
                 shutil.copy(xsd_file, os.path.join(temp_dir, xsd_file))
+            else:
+                st.warning(f"Schema file {xsd_file} not found. The SCORM package may not work correctly.")
         
         # Create a ZIP file
         memory_file = io.BytesIO()
@@ -409,6 +468,14 @@ if uploaded_file is not None and base_url:
                 b64 = base64.b64encode(zipfile_bytes.getvalue()).decode()
                 href = f'<a href="data:application/zip;base64,{b64}" download="{filename}">Download SCORM Package</a>'
                 st.markdown(href, unsafe_allow_html=True)
+                
+                # Show instructions
+                st.subheader("Next Steps")
+                st.write("""
+                1. Download the SCORM package using the link above.
+                2. Import the package into your Learning Management System (LMS).
+                3. Test the package to ensure it works correctly.
+                """)
     except Exception as e:
         st.error(f"Error processing the file: {str(e)}")
 else:
@@ -417,7 +484,19 @@ else:
     ## Instructions
     
     1. Upload your Rise TinCan XML file.
-    2. Enter the base URL of your Rise content.
+    2. Enter the base URL of your Rise content (the URL where your content is hosted without the /index.html part).
     3. Click "Generate SCORM Package" to create a SCORM 1.2 package.
     4. Download the ZIP file and import it into your LMS.
+    
+    ## What this app does
+    
+    This app takes your Rise TinCan XML file and creates separate HTML pages for each activity marked as 'blocks' or 'sections'.
+    Each HTML page contains an iframe that loads the specific lesson from your Rise content.
+    The app generates all the necessary SCORM 1.2 files and packages everything into a ZIP file that can be imported into most Learning Management Systems.
+    """)
+    
+    st.subheader("Example")
+    st.write("""
+    If your Rise content is hosted at `https://example.com/rise-content/` and you have a lesson with ID `abc123`,
+    the app will create an HTML page with an iframe pointing to `https://example.com/rise-content/index.html#/lessons/abc123`.
     """)
