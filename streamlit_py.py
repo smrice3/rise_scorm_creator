@@ -452,8 +452,8 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
     additional_pages = process_additional_html(additional_html_files)
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create directory structure - updated to use web_resources/wiki_content
-        wiki_dir = os.path.join(temp_dir, "web_resources", "wiki_content")
+        # Create directory structure - updated to put wiki_content in root
+        wiki_dir = os.path.join(temp_dir, "wiki_content")
         course_settings_dir = os.path.join(temp_dir, "course_settings")
         os.makedirs(wiki_dir, exist_ok=True)
         os.makedirs(course_settings_dir, exist_ok=True)
