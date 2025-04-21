@@ -192,17 +192,17 @@ def create_imsmanifest(course_title, modules, additional_pages):
     """Create the imsmanifest.xml file for IMSCC"""
     
     resources_xml = ""
-    organizations_xml = ""
+    modules_xml = ""
     
     # Create a unique identifier for the organization
     org_identifier = f"org_{uuid.uuid4().hex[:8]}"
     
     # Create content for each module
     for i, module in enumerate(modules):
-        module_id = f"module_{i+1}"
+        module_id = f"g{uuid.uuid4().hex[:32]}"
         
         # Create module item
-        organizations_xml += f"""
+        modules_xml += f"""
         <item identifier="{module_id}">
             <title>{module['title']}</title>"""
         
@@ -214,8 +214,8 @@ def create_imsmanifest(course_title, modules, additional_pages):
             page['identifier'] = page_identifier  # Store for later use
             
             # Create item entry in the module
-            organizations_xml += f"""
-            <item identifier="i_{page['id']}" identifierref="{page_identifier}">
+            modules_xml += f"""
+            <item identifier="g{uuid.uuid4().hex[:32]}" identifierref="{page_identifier}">
                 <title>{page['name']}</title>
             </item>"""
             
@@ -226,7 +226,7 @@ def create_imsmanifest(course_title, modules, additional_pages):
     </resource>"""
         
         # Close the module item
-        organizations_xml += """
+        modules_xml += """
         </item>"""
     
     # Add additional HTML pages as resources if any
@@ -235,6 +235,16 @@ def create_imsmanifest(course_title, modules, additional_pages):
     <resource type="webcontent" identifier="{page['identifier']}" href="web_resources/wiki_content/{page['filename']}">
         <file href="web_resources/wiki_content/{page['filename']}"/>
     </resource>"""
+    
+    # Create organizations structure with LearningModules
+    organizations_xml = f"""
+    <organizations>
+        <organization identifier="{org_identifier}" structure="rooted-hierarchy">
+            <item identifier="LearningModules">
+{modules_xml}
+            </item>
+        </organization>
+    </organizations>"""
     
     manifest_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <manifest identifier="manifest_{uuid.uuid4().hex[:8]}" 
@@ -254,16 +264,7 @@ def create_imsmanifest(course_title, modules, additional_pages):
       </lomimscc:general>
     </lomimscc:lom>
   </metadata>
-  
-  <organizations>
-    <organization identifier="{org_identifier}" structure="rooted-hierarchy">
-      <item identifier="root_item">
-        <title>{course_title}</title>
-        {organizations_xml}
-      </item>
-    </organization>
-  </organizations>
-  
+  {organizations_xml}
   <resources>
     {resources_xml}
   </resources>
