@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime
 import base64
 import io
-import shutil
 import re
 
 st.set_page_config(page_title="Rise to IMSCC Converter", page_icon="📚", layout="wide")
@@ -82,6 +81,26 @@ def extract_activities(xml_content):
     
     return activities
 
+def organize_activities(activities):
+    """Organize activities into modules and pages based on sections and blocks"""
+    modules = []
+    current_module = None
+    
+    for activity in activities:
+        if activity['type'] == 'section':
+            # Start a new module
+            current_module = {
+                'title': activity['name'],
+                'id': activity['id'],
+                'pages': []
+            }
+            modules.append(current_module)
+        elif activity['type'] == 'block' and current_module is not None:
+            # Add block as a page to the current module
+            current_module['pages'].append(activity)
+    
+    return modules
+
 def get_course_info(xml_content):
     """Extract course title and description from tincan XML"""
     root = ET.fromstring(xml_content)
@@ -111,10 +130,6 @@ def get_course_info(xml_content):
 
 def create_html_page(lesson_id, lesson_title, lesson_description, base_url, url_format="blocks"):
     """Create an HTML page with an iframe pointing to the Rise content"""
-    
-    # Sanitize the title for use in filenames and IDs
-    safe_title = re.sub(r'[^\w\s-]', '', lesson_title).strip().lower()
-    safe_title = re.sub(r'[-\s]+', '-', safe_title)
     
     html_template = f"""<!DOCTYPE html>
 <html>
@@ -152,7 +167,13 @@ def create_html_page(lesson_id, lesson_title, lesson_description, base_url, url_
     
     return html_template
 
-def create_imsmanifest(course_title, activities):
+def create_safe_filename(title):
+    """Create a safe filename from a title"""
+    safe_title = re.sub(r'[^\w\s-]', '', title).strip().lower()
+    safe_title = re.sub(r'[-\s]+', '-', safe_title)
+    return safe_title
+
+def create_imsmanifest(course_title, modules):
     """Create the imsmanifest.xml file for IMSCC"""
     
     resources_xml = ""
@@ -161,23 +182,40 @@ def create_imsmanifest(course_title, activities):
     # Create a unique identifier for the organization
     org_identifier = f"org_{uuid.uuid4().hex[:8]}"
     
-    # Create resource entries for each activity
-    for i, activity in enumerate(activities):
-        # Sanitize the title for use in filenames and IDs
-        safe_title = re.sub(r'[^\w\s-]', '', activity['name']).strip().lower()
-        safe_title = re.sub(r'[-\s]+', '-', safe_title)
+    resource_counter = 1
+    
+    # Create content for each module
+    for module_index, module in enumerate(modules):
+        module_id = f"module_{module_index+1}"
         
-        # Create resource entry
-        resources_xml += f"""
-        <resource identifier="resource_{i+1}" type="webcontent">
-            <file href="wiki_content/{safe_title}.html"/>
-        </resource>"""
-        
-        # Create organization item entry
+        # Create module item
         organizations_xml += f"""
-            <item identifier="item_{i+1}" identifierref="resource_{i+1}">
-                <title>{activity['name']}</title>
+        <item identifier="{module_id}">
+            <title>{module['title']}</title>"""
+        
+        # Add pages to the module
+        for page in module['pages']:
+            # Create a safe filename
+            safe_title = create_safe_filename(page['name'])
+            resource_id = f"resource_{resource_counter}"
+            item_id = f"item_{resource_counter}"
+            resource_counter += 1
+            
+            # Create resource entry
+            resources_xml += f"""
+    <resource identifier="{resource_id}" type="webcontent">
+        <file href="wiki_content/{safe_title}.html"/>
+    </resource>"""
+            
+            # Create item entry in the module
+            organizations_xml += f"""
+            <item identifier="{item_id}" identifierref="{resource_id}">
+                <title>{page['name']}</title>
             </item>"""
+        
+        # Close the module item
+        organizations_xml += """
+        </item>"""
     
     manifest_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <manifest identifier="manifest_{uuid.uuid4().hex[:8]}" 
@@ -185,7 +223,7 @@ def create_imsmanifest(course_title, activities):
          xmlns:lom="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource" 
          xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest" 
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
-         xsi:schemaLocation="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1 http://www.imsglobal.org/xsd/imscp_v1p1.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lomresource_v1p0.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lommanifest_v1p0.xsd">
+         xsi:schemaLocation="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1 http://www.imsglobal.org/profile/cc/ccv1p1/ccv1p1_imscp_v1p2_v1p0.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lomresource_v1p0.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lommanifest_v1p0.xsd">
   <metadata>
     <schema>IMS Common Cartridge</schema>
     <schemaversion>1.1.0</schemaversion>
@@ -215,7 +253,45 @@ def create_imsmanifest(course_title, activities):
     
     return manifest_xml
 
-def create_course_settings(course_title):
+def create_module_meta(modules, course_title):
+    """Create the module_meta.xml file for Canvas"""
+    
+    module_entries = ""
+    
+    for i, module in enumerate(modules):
+        module_id = f"m_{uuid.uuid4().hex[:8]}"
+        
+        items_xml = ""
+        for j, page in enumerate(module['pages']):
+            safe_title = create_safe_filename(page['name'])
+            item_id = f"i_{uuid.uuid4().hex[:8]}"
+            
+            items_xml += f"""
+      <item identifier="{item_id}">
+        <title>{page['name']}</title>
+        <content_type>wiki_page</content_type>
+        <identifierref>wiki_{safe_title}</identifierref>
+        <position>{j+1}</position>
+        <workflow_state>active</workflow_state>
+      </item>"""
+        
+        module_entries += f"""
+  <module identifier="{module_id}">
+    <title>{module['title']}</title>
+    <workflow_state>active</workflow_state>
+    <position>{i+1}</position>
+    <items>{items_xml}
+    </items>
+  </module>"""
+    
+    module_meta_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">{module_entries}
+</modules>
+"""
+    
+    return module_meta_xml
+
+def create_course_settings(course_title, modules):
     """Create necessary course settings files for IMSCC"""
     
     # Create course_settings/canvas_export.txt
@@ -248,17 +324,8 @@ def create_course_settings(course_title):
 </course>
 """
     
-    # Create course_settings/module_meta.xml
-    module_meta_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
-  <module identifier="{uuid.uuid4().hex}">
-    <title>{course_title} Content</title>
-    <workflow_state>active</workflow_state>
-    <position>1</position>
-    <items></items>
-  </module>
-</modules>
-"""
+    # Create module_meta.xml with the proper module structure
+    module_meta_xml = create_module_meta(modules, course_title)
     
     # Create other necessary empty files
     other_files = {
@@ -290,7 +357,10 @@ def create_course_settings(course_title):
     }
 
 def create_imscc_package(activities, course_info, base_url, url_format):
-    """Create an IMSCC package with the extracted activities"""
+    """Create an IMSCC package with the extracted activities organized into modules"""
+    
+    # Organize activities into modules based on sections
+    modules = organize_activities(activities)
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # Create directory structure
@@ -299,25 +369,24 @@ def create_imscc_package(activities, course_info, base_url, url_format):
         os.makedirs(wiki_dir, exist_ok=True)
         os.makedirs(course_settings_dir, exist_ok=True)
         
-        # Create HTML files for each activity
-        for activity in activities:
-            # Sanitize the title for use in filenames
-            safe_title = re.sub(r'[^\w\s-]', '', activity['name']).strip().lower()
-            safe_title = re.sub(r'[-\s]+', '-', safe_title)
-            
-            html_content = create_html_page(activity['id'], activity['name'], activity['description'], base_url, url_format)
-            with open(os.path.join(wiki_dir, f"{safe_title}.html"), 'w', encoding='utf-8') as f:
-                f.write(html_content)
+        # Create HTML files for each page in each module
+        for module in modules:
+            for page in module['pages']:
+                safe_title = create_safe_filename(page['name'])
+                html_content = create_html_page(page['id'], page['name'], page['description'], base_url, url_format)
+                with open(os.path.join(wiki_dir, f"{safe_title}.html"), 'w', encoding='utf-8') as f:
+                    f.write(html_content)
         
         # Create imsmanifest.xml
-        manifest_content = create_imsmanifest(course_info['title'], activities)
+        manifest_content = create_imsmanifest(course_info['title'], modules)
         with open(os.path.join(temp_dir, "imsmanifest.xml"), 'w', encoding='utf-8') as f:
             f.write(manifest_content)
         
         # Create course settings files
-        course_settings = create_course_settings(course_info['title'])
+        course_settings = create_course_settings(course_info['title'], modules)
         for file_path, content in course_settings.items():
             full_path = os.path.join(temp_dir, file_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
         
@@ -331,7 +400,7 @@ def create_imscc_package(activities, course_info, base_url, url_format):
                     zf.write(file_path, arcname)
         
         memory_file.seek(0)
-        return memory_file
+        return memory_file, len(modules)
 
 if uploaded_file is not None and base_url:
     # Process the uploaded file
@@ -342,33 +411,34 @@ if uploaded_file is not None and base_url:
         activities = extract_activities(xml_content)
         course_info = get_course_info(xml_content)
         
+        # Organize into modules
+        modules = organize_activities(activities)
+        
         # Display extracted information
         st.subheader("Extracted Course Information")
         st.write(f"Title: {course_info['title']}")
+        st.write(f"Total modules: {len(modules)}")
         st.write(f"Total activities: {len(activities)}")
         
-        # Create dataframe for displaying activities
-        import pandas as pd
-        activities_df = pd.DataFrame(activities)
-        activities_df = activities_df.rename(columns={
-            'id': 'ID', 
-            'name': 'Name', 
-            'type': 'Type'
-        })
-        
-        st.subheader("Activities to be Included")
-        st.dataframe(activities_df[['ID', 'Name', 'Type']])
+        # Display modules and pages
+        st.subheader("Modules and Pages Structure")
+        for i, module in enumerate(modules):
+            st.write(f"**Module {i+1}: {module['title']}**")
+            for page in module['pages']:
+                st.write(f"- Page: {page['name']}")
         
         # Create IMSCC package button
         if st.button("Generate IMSCC Package"):
             with st.spinner("Generating IMSCC package..."):
-                zipfile_bytes = create_imscc_package(activities, course_info, base_url, url_format)
+                zipfile_bytes, module_count = create_imscc_package(activities, course_info, base_url, url_format)
                 
                 # Create download button
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                filename = f"rise_content_{timestamp}.imscc"
+                course_name = re.sub(r'[^\w\s-]', '', course_info['title']).strip().lower()
+                course_name = re.sub(r'[-\s]+', '-', course_name)
+                filename = f"{course_name}_{timestamp}.imscc"
                 
-                st.success("IMSCC package generated successfully!")
+                st.success(f"IMSCC package generated successfully with {module_count} modules!")
                 
                 # Provide download link
                 b64 = base64.b64encode(zipfile_bytes.getvalue()).decode()
@@ -376,6 +446,8 @@ if uploaded_file is not None and base_url:
                 st.markdown(href, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Error processing the file: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
 else:
     # Show instructions
     st.info("""
@@ -386,4 +458,9 @@ else:
     3. Select the appropriate URL format for your Rise content.
     4. Click "Generate IMSCC Package" to create an IMSCC package.
     5. Download the IMSCC file and import it into Canvas.
+    
+    ### Content Organization
+    - Activities marked as 'section' will become Canvas modules
+    - Activities marked as 'block' will become pages within their respective modules
+    - Each new section starts a new standalone module
     """)
