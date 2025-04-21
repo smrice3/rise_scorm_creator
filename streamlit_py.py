@@ -9,7 +9,7 @@ import base64
 import io
 import re
 
-st.set_page_config(page_title="Rise to IMSCC Converter", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Rise TinCan to IMSCC Converter", page_icon="📚", layout="wide")
 
 st.title("Rise TinCan to IMSCC Converter")
 st.write("This app converts a Rise TinCan XML file into an IMSCC package for Canvas.")
@@ -133,33 +133,33 @@ def get_course_info(xml_content):
     
     return {'title': "Untitled Course", 'description': ""}
 
-def create_html_page(lesson_id, lesson_title, lesson_description, base_url, url_format="blocks"):
+def create_safe_filename(title):
+    """Create a safe filename from a title"""
+    safe_title = re.sub(r'[^\w\s-]', '', title.lower().strip())
+    safe_title = re.sub(r'[-\s]+', '-', safe_title)
+    return safe_title
+
+def create_html_page(lesson_id, lesson_title, base_url, url_format="blocks"):
     """Create an HTML page with an iframe pointing to the Rise content"""
     
-    html_template = f"""<!DOCTYPE html>
-<html>
+    # Create a unique identifier for the page
+    identifier = f"g{uuid.uuid4().hex[:32]}"
+    safe_title = create_safe_filename(lesson_title)
+    
+    html_template = f"""<html>
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 <title>{lesson_title}</title>
-<meta name="identifier" content="g{uuid.uuid4().hex[:32]}"/>
+<meta name="identifier" content="{identifier}"/>
 <meta name="editing_roles" content="teachers"/>
 <meta name="workflow_state" content="active"/>
 </head>
 <body>
-<div style="width: 100%; height: 720px;">
-    <iframe style="width: 100%; height: 100%; border: none;" src="{base_url}/index.html#/{url_format}/{lesson_id}" allowfullscreen></iframe>
-</div>
+<p><iframe style="overflow: hidden; height: 720px; width: 100%;" src="{base_url}/index.html#/{url_format}/{lesson_id}" loading="lazy"></iframe></p>
 </body>
-</html>
-"""
+</html>"""
     
-    return html_template
-
-def create_safe_filename(title):
-    """Create a safe filename from a title"""
-    safe_title = re.sub(r'[^\w\s-]', '', title).strip().lower()
-    safe_title = re.sub(r'[-\s]+', '-', safe_title)
-    return safe_title
+    return html_template, safe_title, identifier
 
 def extract_wiki_metadata(html_content):
     """Extract metadata from an HTML file"""
@@ -197,11 +197,9 @@ def create_imsmanifest(course_title, modules, additional_pages):
     # Create a unique identifier for the organization
     org_identifier = f"org_{uuid.uuid4().hex[:8]}"
     
-    resource_counter = 1
-    
     # Create content for each module
-    for module_index, module in enumerate(modules):
-        module_id = f"module_{module_index+1}"
+    for i, module in enumerate(modules):
+        module_id = f"module_{i+1}"
         
         # Create module item
         organizations_xml += f"""
@@ -210,37 +208,29 @@ def create_imsmanifest(course_title, modules, additional_pages):
         
         # Add pages to the module
         for page in module['pages']:
-            # Create a safe filename
-            safe_title = create_safe_filename(page['name'])
-            resource_id = f"resource_{resource_counter}"
-            item_id = f"item_{resource_counter}"
-            resource_counter += 1
-            
-            # Create resource entry
-            resources_xml += f"""
-    <resource identifier="{resource_id}" type="webcontent">
-        <file href="wiki_content/{safe_title}.html"/>
-    </resource>"""
+            # Get page metadata
+            safe_filename = f"{create_safe_filename(page['name'])}.html"
             
             # Create item entry in the module
             organizations_xml += f"""
-            <item identifier="{item_id}" identifierref="{resource_id}">
+            <item identifier="i_{page['id']}" identifierref="r_{page['id']}">
                 <title>{page['name']}</title>
             </item>"""
+            
+            # Create resource entry
+            resources_xml += f"""
+    <resource identifier="r_{page['id']}" type="webcontent">
+        <file href="wiki_content/{safe_filename}"/>
+    </resource>"""
         
         # Close the module item
         organizations_xml += """
         </item>"""
     
-    # Add additional HTML pages as resources
+    # Add additional HTML pages as resources if any
     for page in additional_pages:
-        resource_id = f"resource_{resource_counter}"
-        item_id = f"item_{resource_counter}"
-        resource_counter += 1
-        
-        # Create resource entry
         resources_xml += f"""
-    <resource identifier="{resource_id}" type="webcontent">
+    <resource identifier="{page['identifier']}" type="webcontent">
         <file href="wiki_content/{page['filename']}"/>
     </resource>"""
     
@@ -283,7 +273,35 @@ def create_imsmanifest(course_title, modules, additional_pages):
 def create_module_meta(modules, additional_pages, course_title):
     """Create the module_meta.xml file for Canvas"""
     
-    module_entries = ""
+    items_by_module = {}
+    modules_xml = ""
+    
+    # Create module entries for the Rise content
+    for i, module in enumerate(modules):
+        module_id = f"m_{uuid.uuid4().hex[:8]}"
+        
+        items_xml = ""
+        for j, page in enumerate(module['pages']):
+            item_id = f"i_{uuid.uuid4().hex[:8]}"
+            page_identifier = f"g{uuid.uuid4().hex[:32]}"  # Generate a unique identifier for each page
+            
+            items_xml += f"""
+      <item identifier="{item_id}">
+        <title>{page['name']}</title>
+        <content_type>wiki_page</content_type>
+        <identifierref>r_{page['id']}</identifierref>
+        <position>{j+1}</position>
+        <workflow_state>active</workflow_state>
+      </item>"""
+        
+        modules_xml += f"""
+  <module identifier="{module_id}">
+    <title>{module['title']}</title>
+    <workflow_state>active</workflow_state>
+    <position>{i+1}</position>
+    <items>{items_xml}
+    </items>
+  </module>"""
     
     # Create "Additional Content" module for the additional HTML pages if they exist
     if additional_pages:
@@ -303,7 +321,7 @@ def create_module_meta(modules, additional_pages, course_title):
       </item>"""
         
         # Add additional content module at the end
-        additional_module = f"""
+        modules_xml += f"""
   <module identifier="{additional_module_id}">
     <title>Additional Content</title>
     <workflow_state>active</workflow_state>
@@ -311,39 +329,9 @@ def create_module_meta(modules, additional_pages, course_title):
     <items>{items_xml}
     </items>
   </module>"""
-    else:
-        additional_module = ""
-    
-    # Create module entries for the Rise content
-    for i, module in enumerate(modules):
-        module_id = f"m_{uuid.uuid4().hex[:8]}"
-        
-        items_xml = ""
-        for j, page in enumerate(module['pages']):
-            safe_title = create_safe_filename(page['name'])
-            page_identifier = f"g{uuid.uuid4().hex[:32]}"
-            item_id = f"i_{uuid.uuid4().hex[:8]}"
-            
-            items_xml += f"""
-      <item identifier="{item_id}">
-        <title>{page['name']}</title>
-        <content_type>wiki_page</content_type>
-        <identifierref>{page_identifier}</identifierref>
-        <position>{j+1}</position>
-        <workflow_state>active</workflow_state>
-      </item>"""
-        
-        module_entries += f"""
-  <module identifier="{module_id}">
-    <title>{module['title']}</title>
-    <workflow_state>active</workflow_state>
-    <position>{i+1}</position>
-    <items>{items_xml}
-    </items>
-  </module>"""
     
     module_meta_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">{module_entries}{additional_module}
+<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">{modules_xml}
 </modules>
 """
     
@@ -458,9 +446,9 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
         # Create HTML files for each page in each module
         for module in modules:
             for page in module['pages']:
-                safe_title = create_safe_filename(page['name'])
-                html_content = create_html_page(page['id'], page['name'], page['description'], base_url, url_format)
-                with open(os.path.join(wiki_dir, f"{safe_title}.html"), 'w', encoding='utf-8') as f:
+                html_content, safe_title, identifier = create_html_page(page['id'], page['name'], base_url, url_format)
+                page_filename = f"{safe_title}.html"
+                with open(os.path.join(wiki_dir, page_filename), 'w', encoding='utf-8') as f:
                     f.write(html_content)
         
         # Save additional HTML files
