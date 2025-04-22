@@ -139,11 +139,17 @@ def create_safe_filename(title):
     safe_title = re.sub(r'[-\s]+', '-', safe_title)
     return safe_title
 
-def create_html_page(lesson_id, lesson_title, base_url, url_format="blocks"):
+def generate_page_identifier():
+    """Generate a unique identifier for a page"""
+    return f"g{uuid.uuid4().hex[:32]}"
+
+def create_html_page(lesson_id, lesson_title, base_url, url_format="blocks", identifier=None):
     """Create an HTML page with an iframe pointing to the Rise content"""
     
-    # Create a unique identifier for the page
-    identifier = f"g{uuid.uuid4().hex[:32]}"
+    # Use provided identifier or create a new one
+    if not identifier:
+        identifier = generate_page_identifier()
+    
     safe_title = create_safe_filename(lesson_title)
     
     html_template = f"""<html>
@@ -210,8 +216,7 @@ def create_imsmanifest(course_title, modules, additional_pages):
         for page in module['pages']:
             # Get page metadata
             safe_filename = f"{create_safe_filename(page['name'])}.html"
-            page_identifier = f"g{uuid.uuid4().hex[:32]}"
-            page['identifier'] = page_identifier  # Store for later use
+            page_identifier = page['identifier']
             
             # Create item entry in the module
             modules_xml += f"""
@@ -219,8 +224,7 @@ def create_imsmanifest(course_title, modules, additional_pages):
                 <title>{page['name']}</title>
             </item>"""
             
-            # Create resource entry - using the proper format with href at the resource level
-            # Updated paths to use wiki_content directly
+            # Create resource entry using the page's identifier
             resources_xml += f"""
     <resource type="webcontent" identifier="{page_identifier}" href="wiki_content/{safe_filename}">
         <file href="wiki_content/{safe_filename}"/>
@@ -232,7 +236,6 @@ def create_imsmanifest(course_title, modules, additional_pages):
     
     # Add additional HTML pages as resources if any
     for page in additional_pages:
-        # Updated paths to use wiki_content directly
         resources_xml += f"""
     <resource type="webcontent" identifier="{page['identifier']}" href="wiki_content/{page['filename']}">
         <file href="wiki_content/{page['filename']}"/>
@@ -288,11 +291,8 @@ def create_module_meta(modules, additional_pages, course_title):
         for j, page in enumerate(module['pages']):
             item_id = f"i_{uuid.uuid4().hex[:8]}"
             
-            # Use the identifier we stored when creating the manifest - this is the key change
-            page_identifier = page.get('identifier')
-            if not page_identifier:
-                # This shouldn't happen if manifest is created first, but just in case
-                page_identifier = f"g{uuid.uuid4().hex[:32]}"
+            # Use the identifier stored in the page object
+            page_identifier = page['identifier']
             
             # Create item with WikiPage content_type and link_settings_json
             items_xml += f"""
@@ -324,7 +324,7 @@ def create_module_meta(modules, additional_pages, course_title):
         for j, page in enumerate(additional_pages):
             item_id = f"i_{uuid.uuid4().hex[:8]}"
             
-            # Use the existing identifier from the page - this should match what's in the manifest
+            # Use the identifier from the page
             page_identifier = page['identifier']
             
             # Create item with WikiPage content_type and link_settings_json
@@ -453,11 +453,16 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
     # Organize activities into modules based on sections
     modules = organize_activities(activities)
     
+    # First, assign identifiers to all pages
+    for module in modules:
+        for page in module['pages']:
+            page['identifier'] = generate_page_identifier()
+    
     # Process additional HTML files
     additional_pages = process_additional_html(additional_html_files)
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create directory structure - updated to put wiki_content in root
+        # Create directory structure
         wiki_dir = os.path.join(temp_dir, "wiki_content")
         course_settings_dir = os.path.join(temp_dir, "course_settings")
         os.makedirs(wiki_dir, exist_ok=True)
@@ -466,9 +471,9 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
         # Create HTML files for each page in each module
         for module in modules:
             for page in module['pages']:
-                html_content, safe_title, identifier = create_html_page(page['id'], page['name'], base_url, url_format)
+                # Use the already assigned identifier
+                html_content, safe_title, _ = create_html_page(page['id'], page['name'], base_url, url_format, page['identifier'])
                 page_filename = f"{safe_title}.html"
-                page['identifier'] = identifier  # Store identifier for use in manifest
                 with open(os.path.join(wiki_dir, page_filename), 'w', encoding='utf-8') as f:
                     f.write(html_content)
         
@@ -477,12 +482,12 @@ def create_imscc_package(activities, course_info, base_url, url_format, addition
             with open(os.path.join(wiki_dir, page['filename']), 'w', encoding='utf-8') as f:
                 f.write(page['content'])
         
-        # Create imsmanifest.xml
+        # Create imsmanifest.xml using the identifiers in the pages
         manifest_content = create_imsmanifest(course_info['title'], modules, additional_pages)
         with open(os.path.join(temp_dir, "imsmanifest.xml"), 'w', encoding='utf-8') as f:
             f.write(manifest_content)
         
-        # Create course settings files
+        # Create course settings files also using the identifiers in the pages
         course_settings = create_course_settings(course_info['title'], modules, additional_pages)
         for file_path, content in course_settings.items():
             full_path = os.path.join(temp_dir, file_path)
